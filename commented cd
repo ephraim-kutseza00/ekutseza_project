@@ -1,0 +1,107 @@
+# Import necessary libraries
+import energym
+from energym.examples.Controller import MixedUseController
+import numpy as np
+import random
+import pandas as pd
+import matplotlib.pyplot as plt
+from stable_baselines3 import PPO
+
+# Ensure matplotlib plots inline in Jupyter
+%matplotlib inline
+
+# Set up the environment with the specific weather data
+weather = "GRC_A_Athens"
+env = energym.make("MixedUseFanFCU-v0", weather=weather, simulation_days=30)
+
+# Print the available inputs for control
+inputs = env.get_inputs_names()
+print("Available inputs for control:", inputs)
+
+# Create an instance of the MixedUseController
+controller = MixedUseController(
+    control_list=inputs, 
+    lower_tol=0.3, 
+    upper_tol=0.8, 
+    nighttime_setback=True, 
+    nighttime_start=17, 
+    nighttime_end=6, 
+    nighttime_temp=18
+)
+
+# Adjust random seeds for reproducibility
+env.seed(42)
+random.seed(42)
+np.random.seed(42)
+
+# Instantiate the PPO agent for reinforcement learning
+model = PPO('MlpPolicy', env, verbose=1)
+
+# Train the agent
+print("Training the PPO agent...")
+model.learn(total_timesteps=10000)
+print("Training completed.")
+
+# Evaluate the agent and collect results
+steps = 96 * 10  # Simulating for 10 days
+out_list = []
+controls = []
+outputs = env.reset()
+hour = 0
+
+for _ in range(steps):
+    # Get control actions from the trained RL model
+    action, _states = model.predict(outputs)
+    action_dict = {inputs[i]: action[i] for i in range(len(inputs))}
+
+    # Apply the actions to the environment
+    outputs, rewards, done, info = env.step(action_dict)
+    _, hour, _, _ = env.get_date()
+
+    # Store the outputs and controls for later analysis
+    out_list.append(outputs)
+    controls.append(action_dict)
+    
+    # Reset the environment if done
+    if done:
+        outputs = env.reset()
+
+# Convert the outputs and controls to DataFrames for analysis
+out_df = pd.DataFrame(out_list)
+cmd_df = pd.DataFrame(controls)
+
+# Plotting the results
+plt.figure(figsize=(15, 10))
+
+# Subplot 1: Indoor Temperature and Thermostat Set Point
+plt.subplot(3, 1, 1)
+plt.plot(out_df['Z02_T'], 'r', label='Indoor Temperature')
+plt.plot(out_df['Z02_T_Thermostat_sp_out'], 'b--', label='Thermostat Set Point')
+if 'Bd_Fl_AHU1_sp' in cmd_df:
+    plt.plot(cmd_df['Bd_Fl_AHU1_sp'], label='AHU1 Set Point')
+plt.xlabel('Steps')
+plt.ylabel('Temperature (C)')
+plt.legend()
+plt.title('Indoor Temperature and Thermostat Set Point')
+
+# Subplot 2: External Temperature
+plt.subplot(3, 1, 2)
+plt.plot(out_df['Ext_T'], 'r', label='External Temperature')
+plt.xlabel('Steps')
+plt.ylabel('Temperature (C)')
+plt.legend()
+plt.title('External Temperature')
+
+# Subplot 3: Power Consumption
+plt.subplot(3, 1, 3)
+plt.plot(out_df['Fa_Pw_All'], 'g', label='Fan Power Consumption')
+plt.xlabel('Steps')
+plt.ylabel('Power (kW)')
+plt.legend()
+plt.title('Fan Power Consumption')
+
+plt.tight_layout()
+plt.show()
+
+# Close the environment
+env.close()
